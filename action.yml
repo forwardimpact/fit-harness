@@ -3,10 +3,17 @@ description: Run agent tasks via the fit-eval CLI using the Claude Agent SDK
 
 inputs:
   task-file:
-    description: Path to task file (mutually exclusive with task-text)
+    description: Path to task file (mutually exclusive with task-text / task-event)
     required: false
   task-text:
-    description: Inline task text (mutually exclusive with task-file)
+    description: Inline task text (mutually exclusive with task-file / task-event)
+    required: false
+  task-event:
+    description: |
+      Path to a native GitHub event payload JSON (typically `${{ github.event_path }}`).
+      The CLI composes the task from the payload using the (event_name, action)
+      template that matches `$GITHUB_EVENT_NAME`, and lifts `payload.inputs.prompt`
+      into the task amendment. Mutually exclusive with task-file / task-text.
     required: false
   mode:
     description: Execution mode — "run", "supervise", "facilitate", or "discuss"
@@ -138,6 +145,7 @@ runs:
         MODE: ${{ inputs.mode }}
         TASK_FILE: ${{ inputs.task-file }}
         TASK_TEXT: ${{ inputs.task-text }}
+        TASK_EVENT: ${{ inputs.task-event }}
         CWD: ${{ inputs.cwd }}
         SUPERVISOR_CWD: ${{ inputs.supervisor-cwd }}
         AGENT_CWD: ${{ inputs.agent-cwd }}
@@ -169,17 +177,29 @@ runs:
 
         args=()
 
-        # Resolve task source — exactly one of task-file or task-text is required
-        if [ -n "$TASK_FILE" ] && [ -n "$TASK_TEXT" ]; then
-          echo "::error::task-file and task-text are mutually exclusive"
+        # Resolve task source — exactly one of task-file, task-text, task-event
+        # is required. task-event hands the runner's native event JSON to the
+        # CLI; libeval composes the task from the (event_name, action) template
+        # and lifts payload.inputs.prompt into the amendment.
+        task_sources=0
+        [ -n "$TASK_FILE" ] && task_sources=$((task_sources + 1))
+        [ -n "$TASK_TEXT" ] && task_sources=$((task_sources + 1))
+        [ -n "$TASK_EVENT" ] && task_sources=$((task_sources + 1))
+
+        if [ "$task_sources" -eq 0 ]; then
+          echo "::error::One of task-file, task-text, task-event is required"
           exit 1
-        elif [ -n "$TASK_FILE" ]; then
+        elif [ "$task_sources" -gt 1 ]; then
+          echo "::error::task-file, task-text, task-event are mutually exclusive"
+          exit 1
+        fi
+
+        if [ -n "$TASK_FILE" ]; then
           args+=("--task-file=$TASK_FILE")
         elif [ -n "$TASK_TEXT" ]; then
           args+=("--task-text=$TASK_TEXT")
         else
-          echo "::error::Either task-file or task-text is required"
-          exit 1
+          args+=("--task-event=$TASK_EVENT")
         fi
 
         if [ -n "$TASK_AMEND" ]; then
